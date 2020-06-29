@@ -246,11 +246,11 @@ void Show_Time(int num)
     int j;
     int d = result[num] - state[num];
     uint8 trun_tick[4] = {1, 5, 14, 30};
-    d = (d + 9) % 9 + 18 - 4; //滚动至目标前第四个数
+    d = (d + 9) % 9 + 18 - 6; //滚动至目标前第四个数
     for (i = 0; i != 4; i++)
         trun_tick[i] += d;
     d += 30; //非线性停止
-    for (i = 0, j = 0; i != d; d++)
+    for (i = 0, j = 0; i != d; i++)
     {
         if (i == trun_tick[j])
             j++;
@@ -270,24 +270,30 @@ void Show_Time(int num)
 //调用Show_Time()
 void __irq EINT0_ISR()
 {
+    Show_Time(0);
     stop_flag |= (1 << 0);
-    //Show_Time();
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
     EXTINT = 0x0F;
     VICVectAddr = 0;
 }
 
 void __irq EINT1_ISR()
 {
+    Show_Time(1);
     stop_flag |= (1 << 1);
-    //Show_Time();
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
     EXTINT = 0x0F;
     VICVectAddr = 0;
 }
 
 void __irq EINT2_ISR()
 {
+    Show_Time(2);
     stop_flag |= (1 << 2);
-    //Show_Time();
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
     EXTINT = 0x0F;
     VICVectAddr = 0;
 }
@@ -310,6 +316,26 @@ void EINT_Init()
     VICVectAddr9 = (uint32)EINT2_ISR;
     VICVectCntl9 = 0x20 | 16;
     VICIntEnable = 7 << 14;
+}
+
+void Wind_Up()
+{
+    switch (fate)
+    {
+    case LOSE:
+        coin -= 1;
+        break;
+    case SINGLE:
+        coin += 3;
+        break;
+    case NORMAL:
+        coin += 20;
+        break;
+    case BIG:
+        coin += 100;
+        break;
+    }
+    Update();
 }
 
 int main(void)
@@ -351,6 +377,12 @@ int main(void)
                 ;
             T0IR |= 1;
             Refresh();
+            if ((stop_flag & (1 << 4)) != 0)
+            {
+                stop_flag = 0;
+                Wind_Up();
+                break;
+            }
         }
         Timer0_End();
     }
