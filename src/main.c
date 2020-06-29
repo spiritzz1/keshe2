@@ -114,6 +114,14 @@ void Create_State()
     }
 }
 
+void Timer1_Init()
+{
+    T1TCR = 0;
+    T1PR = 0;
+    T1TC = 0;
+    T1TCR = 1;
+}
+
 void Timer0_Init()
 {
     T0TCR = 0;
@@ -182,12 +190,14 @@ void GameInit()
     state[0] = 7;
     state[1] = 7;
     state[2] = 7;
+    level = 1;
 }
 
 void GameStart()
 {
     led_state = 0x38;
     Update();
+    Set_Rand_seed(T1TC & 0xFFF);
     Fortune_Telling();
     Create_State();
     while ((IO0PIN & Start) == 0)
@@ -308,6 +318,7 @@ int main(void)
     EINT_Init();
     GameInit();
     Timer0_Init();
+    Timer1_Init();
     Update();
     while (1)
     {
