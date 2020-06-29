@@ -22,10 +22,11 @@
 
 #define n 9
 
-volatile uint8 state[3];  //3个数码管的状态
-volatile uint8 result[3]; //计算出来的状态
-volatile uint8 fate;      //根据概率表决定的结果（LOSE,SINGLE,NORMAL,BIG）
-volatile uint8 stop_flag;
+volatile uint8 state[3];      //3个数码管的状态[0:8]
+volatile uint8 result[3];     //计算出来的状态[0:8]
+volatile int order_rank[3]; //state[]状态在order[][]里的rank
+volatile uint8 fate;          //根据概率表决定的结果（LOSE,SINGLE,NORMAL,BIG）
+volatile uint8 stop_flag;     //滚动停止标记，第4位为1，说明全部停止
 uint8 led_state;
 uint8 level;
 
@@ -41,6 +42,16 @@ const uint16 fate_tab[5][3] = {
     {17, 82, 1411},
     {16, 77, 1326},
     {5, 28, 496}};
+
+const uint8 order[3][9] = {
+    {6, 3, 2, 7, 0, 5, 4, 1, 8},
+    {6, 0, 7, 2, 8, 4, 5, 1, 3},
+    {6, 8, 1, 2, 5, 4, 0, 3, 7}};
+
+const uint8 order_map[3][9] = {
+    {4, 7, 2, 1, 6, 5, 0, 3, 8},
+    {1, 7, 3, 8, 5, 6, 0, 2, 4},
+    {6, 2, 3, 7, 5, 4, 0, 8, 1}};
 
 void Set_Rand_seed(unsigned int seed)
 {
@@ -190,7 +201,10 @@ void GameInit()
     state[0] = 7;
     state[1] = 7;
     state[2] = 7;
-    level = 1;
+    order_rank[0] = 0;
+    order_rank[1] = 0;
+    order_rank[2] = 0;
+    level = 0;
 }
 
 void GameStart()
@@ -229,33 +243,46 @@ void Add_Wager()
 void Refresh()
 {
     if ((stop_flag & (1 << 0)) == 0)
-        state[0] = (state[0] + 1) % 9 + 1;
+    {
+        order_rank[0] = (order_rank[0] + 1) % 9;
+        state[0] = order[0][order_rank[0]];
+    }
     if ((stop_flag & (1 << 1)) == 0)
-        state[1] = (state[1] + 1) % 9 + 1;
+    {
+        order_rank[1] = (order_rank[1] + 1) % 9;
+        state[1] = order[1][order_rank[1]];
+    }
     if ((stop_flag & (1 << 2)) == 0)
-        state[2] = (state[2] + 1) % 9 + 1;
+    {
+        order_rank[2] = (order_rank[2] + 1) % 9;
+        state[2] = order[2][order_rank[2]];
+    }
     IO1CLR |= 0xFFF0000;
-    IO1SET |= state[0] << 16;
-    IO1SET |= state[1] << 20;
-    IO1SET |= state[2] << 24;
+    IO1SET |= state[0] + 1 << 16;
+    IO1SET |= state[1] + 1 << 20;
+    IO1SET |= state[2] + 1 << 24;
 }
 
 void Show_Time(int num)
 {
     int i;
     int j;
-    int d = result[num] - state[num];
-    uint8 trun_tick[4] = {1, 5, 14, 30};
-    d = (d + 9) % 9 + 18 - 6; //滚动至目标前第四个数
-    for (i = 0; i != 4; i++)
-        trun_tick[i] += d;
-    d += 30; //非线性停止
-    for (i = 0, j = 0; i != d; i++)
+    int d = order_map[num][result[num]] - order_rank[num];
+    const uint8 trun_tick[4] = {0, 4, 13, 29};
+    d = (d + 9) % 9 + 18 - 4; //滚动至目标前第四个数
+    for (i = 0; i != d; i++)
+    {
+        while ((T0IR & 1) == 0) //50ms
+            ;
+        T0IR |= 1;
+        Refresh();
+    }
+    for (i = 0, j = 0; i != 30; i++)
     {
         if (i == trun_tick[j])
             j++;
         else //未到转变点，预先减掉Reflesh()即将加的
-            state[num]--;
+            order_rank[num]--;
         while ((T0IR & 1) == 0) //50ms
             ;
         T0IR |= 1;
@@ -323,16 +350,16 @@ void Wind_Up()
     switch (fate)
     {
     case LOSE:
-        coin -= 1;
+        coin -= 1 * wager;
         break;
     case SINGLE:
-        coin += 3;
+        coin += 3 * wager;
         break;
     case NORMAL:
-        coin += 20;
+        coin += 20 * wager;
         break;
     case BIG:
-        coin += 100;
+        coin += 100 * wager;
         break;
     }
     Update();
