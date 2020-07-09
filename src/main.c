@@ -1,279 +1,417 @@
-/****************************************Copyright (c)**************************************************
-**                               Guangzou ZLG-MCU Development Co.,LTD.
-**                                      graduate school
-**                                 http://www.zlgmcu.com
-**
-**--------------File Info-------------------------------------------------------------------------------
-** File name:			main.c
-** Last modified Date:  2004-09-16
-** Last Version:		1.0
-** Descriptions:		The main() function example template
-**
-**------------------------------------------------------------------------------------------------------
-** Created by:			Chenmingji
-** Created date:		2004-09-16
-** Version:				1.0
-** Descriptions:		The original version
-**
-**------------------------------------------------------------------------------------------------------
-** Modified by:
-** Modified date:
-** Version:
-** Descriptions:
-**
-********************************************************************************************************/
+/*
+ * File: main.c
+ * Project: SLots
+ * Created Date: Wednesday June 24th 2020
+ * Author: hong
+ * -----
+ * Last Modified: Sunday, June 28th 2020, 10:43:06 pm
+ * Modified By: wei
+ * -----
+ * Copyright (c) 2020 hong
+ */
 #include "config.h"
 
-volatile uint8 state[3]={0,0,0};  //3个数码管的状态
-volatile uint8 result[3]; //计算出来的状态
-volatile uint8 fate;      //根据概率表决定的结果（LOSE,SINGLE,NORMAL,BIG）
+#define Start (1 << 21)
+#define AddCoin (1 << 22)
+#define AddWager (1 << 23)
 
-const char display1[]={0xE0,0xE1,0xE2,0xE3,0xE4,0xE5,0xE6,0xE7,0xE8,0xE9};//使只有第一个数码管亮的0-9
-const char display2[]={0xD0,0xD1,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9};
-const char display3[]={0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9};
-const char display4[]={0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79};
+#define LOSE 3
+#define SINGLE 2
+#define NORMAL 1
+#define BIG 0
 
-//数字显示模式
-const uint8 number1[]={0x07,0x04,0x03,0x08,0x01,0x06,0x05,0x02,0x09};
-const uint8 number2[]={0x07,0x01,0x08,0x03,0x09,0x05,0x06,0x02,0x04};
-const uint8 number3[]={0x07,0x09,0x02,0x03,0x06,0x05,0x01,0x04,0x08};
+#define n 9
 
-int flag[3]={0,0,0};
-//三个数码管的指示灯
-char LEDTAB=0x38;
+volatile uint8 state[3];      //3个数码管的状态[0:8]
+volatile uint8 result[3];     //计算出来的状态[0:8]
+volatile int order_rank[3]; //state[]状态在order[][]里的rank
+volatile uint8 fate;          //根据概率表决定的结果（LOSE,SINGLE,NORMAL,BIG）
+volatile uint8 stop_flag;     //滚动停止标记，第4位为1，说明全部停止
+uint8 led_state;
+uint8 level;
 
-#define Start (1<<21)
-#define AddCoin (1<<22)
-#define AddWager (1<<23)
+volatile int coin;
+volatile int wager;
 
-int coin=0,wager=1;
+long rand_seed;
 
+const uint8 map[9] = {1, 2, 4, 5, 6, 8, 9, 3, 7};
+const uint16 fate_tab[5][3] = {
+    {19, 91, 1567},
+    {18, 86, 1490},
+    {17, 82, 1411},
+    {16, 77, 1326},
+    {5, 28, 496}};
 
+const uint8 order[3][9] = {
+    {6, 3, 2, 7, 0, 5, 4, 1, 8},
+    {6, 0, 7, 2, 8, 4, 5, 1, 3},
+    {6, 8, 1, 2, 5, 4, 0, 3, 7}};
+
+const uint8 order_map[3][9] = {
+    {4, 7, 2, 1, 6, 5, 0, 3, 8},
+    {1, 7, 3, 8, 5, 6, 0, 2, 4},
+    {6, 2, 3, 7, 5, 4, 0, 8, 1}};
+
+void Set_Rand_seed(unsigned int seed)
+{
+    rand_seed = (long)seed;
+}
+
+int Get_Rand(void)
+{
+    return (((rand_seed = rand_seed * 214013L + 2531011L) >> 16) & 0x7fff);
+}
+
+void Change_Level()
+{
+    level = (level + 1) % 5;
+}
+
+void Fortune_Telling()
+{
+    int ran = Get_Rand() % 10000;
+    if (ran > fate_tab[level][2])
+    {
+        fate = LOSE;
+    }
+    else if (ran > fate_tab[level][1])
+    {
+        fate = SINGLE;
+    }
+    else if (ran > fate_tab[level][0])
+    {
+        fate = NORMAL;
+    }
+    else
+    {
+        fate = BIG;
+    }
+}
+
+void Create_State()
+{
+    switch (fate)
+    {
+    case LOSE:
+        result[1] = Get_Rand() % n;
+        result[0] = (result[1] + 1 + Get_Rand() % (n - 1)) % n; //0-1 1-2不同就行,加上随机数[1:n-1]保证不同
+        result[2] = (result[1] + 1 + Get_Rand() % (n - 1)) % n;
+        break;
+    case SINGLE:
+        if (Get_Rand() % 2)
+        {
+            result[0] = Get_Rand() % n;
+            result[1] = result[0];
+            result[2] = (result[0] + 1 + Get_Rand() % (n - 1)) % n; //加上随机数[1:n-1]保证不同
+        }
+        else
+        {
+            result[1] = Get_Rand() % n;
+            result[2] = result[1];
+            result[0] = (result[1] + 1 + Get_Rand() % (n - 1)) % n; //加上随机数[1:n-1]保证不同
+        }
+        break;
+    case NORMAL:
+        result[0] = map[Get_Rand() % (n - 2)];
+        result[1] = result[0];
+        result[2] = result[0];
+        break;
+    case BIG:
+        result[0] = map[n - (Get_Rand() % 2)];
+        result[1] = result[0];
+        result[2] = result[0];
+        break;
+    }
+}
+
+void Timer1_Init()
+{
+    T1TCR = 0;
+    T1PR = 0;
+    T1TC = 0;
+    T1TCR = 1;
+}
+
+void Timer0_Init()
+{
+    T0TCR = 0;
+    T0PR = 0;
+    T0PC = 0;
+    T0TC = 0;
+    T0MCR = 0x03;
+    T0MR0 = Fosc / 20 - 1;
+}
+
+void Timer0_Start()
+{
+    T0TCR = 1;
+}
+
+void Timer0_End()
+{
+    T0TCR = 2;
+}
 
 void SPI_Init(void)
-{  
-	//-----------引脚初始化------------
-	PINSEL0 |= 0x100;	//p0.4	SCK
-	PINSEL0 &= ~0xC000;	//p0.7	RCK(GPIO)
-	PINSEL0 |= 0x1000;	//p0.6	MOSI
-	IO0DIR |= 1<<7;
-	
-	//----------SPI寄存器初始化-----------  
-	S0PCCR = 0x08;		// 设置SPI时钟分频
-	S0PCR = 0x30;		// 设置SPI接口模式，MSTR=1，主模式
-	//CPOL=0，CPHA=0，LSBF=1，LSB在前
+{
+    //-----------引脚初始化------------
+    PINSEL0 |= 0x100;   //p0.4	SCK
+    PINSEL0 &= ~0xC000; //p0.7	RCK(GPIO)
+    PINSEL0 |= 0x1000;  //p0.6	MOSI
+    IO0DIR |= 1 << 7;
+
+    //----------SPI寄存器初始化-----------
+    S0PCCR = 0x08; // 设置SPI时钟分频
+    S0PCR = 0x30;  // 设置SPI接口模式，MSTR=1，主模式
+                   //CPOL=0，CPHA=0，LSBF=1，LSB在前
 }
 
 void SPI_Write(uint8 ch)
 {
-	S0PDR = ch;						//写数据
-	while(0 == (S0PSR & (1 << 7)));	//等待发送完毕
+    S0PDR = ch; //写数据
+    while (0 == (S0PSR & (1 << 7)))
+        ; //等待发送完毕
 }
 
-void MessageDisplay(char LED)
+void Update()
 {
-	int j;
-	IO0CLR |= (1 << 7);
-	SPI_Write(LED);
-	SPI_Write(display1[(coin/100)]);
-	IO0SET |= (1 << 7);
-	for(j=0;j<10000;j++);
-	IO0CLR |= (1 << 7);
-	SPI_Write(LED);
-	SPI_Write(display2[((coin%100)/10)]);
-	IO0SET |= (1 << 7);
-	for(j=0;j<10000;j++);
-	IO0CLR |= (1 << 7);
-	SPI_Write(LED);
-	SPI_Write(display3[(coin%10)]);
-	IO0SET |= (1 << 7);
-	for(j=0;j<10000;j++);
-	IO0CLR |= (1 << 7);
-	SPI_Write(LED);
-	SPI_Write(display4[(wager%10)]);
-	IO0SET |= (1 << 7);
-	for(j=0;j<10000;j++);
+    uint8 data1;
+    uint8 data2;
+    uint8 data3;
+    data1 = led_state;
+    data2 = (wager << 4) + coin % 10;
+    data3 = (coin / 10 % 10 << 4) + coin / 100 % 10;
+    IO0CLR |= (1 << 7); //Start
+    SPI_Write(data1);
+    SPI_Write(data2);
+    SPI_Write(data3);
+    IO0SET |= (1 << 7); //Done
 }
 
 void GameInit()
 {
-	PINSEL2=0;
-	IO1DIR|=0xFFF0000;
-	IO1CLR|=0xFFF0000;
+    PINSEL2 = 0;
+    IO1DIR |= 0xFFF0000;
+    IO1CLR |= 0xFFF0000;
+    led_state = 0x6;
+    coin = 0;
+    wager = 1;
+    stop_flag = 0;
+    state[0] = 7;
+    state[1] = 7;
+    state[2] = 7;
+    order_rank[0] = 0;
+    order_rank[1] = 0;
+    order_rank[2] = 0;
+    level = 0;
 }
 
 void GameStart()
 {
-	IO0CLR |= (1 << 7);
-	SPI_Write(0x38);
-	SPI_Write(0xF0);
-	IO0SET |= (1 << 7);
-	while((IO0PIN&Start)==0);
+    led_state = 0x38;
+    Update();
+    Set_Rand_seed(T1TC & 0xFFF);
+    Fortune_Telling();
+    Create_State();
+    while ((IO0PIN & Start) == 0)
+        ;
 }
 
 void Add_Coin()
 {
-	coin=coin+1;
-	while((IO0PIN&AddCoin)==0)
-			MessageDisplay(0x00);
+    coin = coin + 1;
+    if (coin == 1)
+        led_state = 0x7;
+    Update();
+    while ((IO0PIN & AddCoin) == 0)
+        ;
 }
 
 void Add_Wager()
 {
-	int j;
-	while((IO0PIN&AddWager)==0)
-	{
-	IO0CLR |= (1 << 7);
-	SPI_Write(0x00);
-	SPI_Write(display4[wager%10]);
-	IO0SET |= (1 << 7);
-	for(j=0;j<1000000;j++);
-	wager++;
-	if(wager==4)
-		wager=1;
-	}
+    wager++;
+    if (wager == 4)
+        wager = 1;
+    Update();
+    while ((IO0PIN & AddWager) == 0)
+        ;
 }
 
+//能判断出哪些数码管不需要滚动（被按停）
+//更新state（滚动数值），并刷新给3个数码管
 void Refresh()
 {
-	int j;
-	IO1CLR|=0xFFF0000;
-	IO1SET|=(number3[state[2]]<<24);
-	IO1SET|=(number2[state[1]]<<20);
-	IO1SET|=(number1[state[0]]<<16);
-	for(j=0;j<1000000;j++);
-	if(flag[0]==0)
-		state[0]=(state[0]+1)%9;
-	if(flag[1]==0)
-		state[1]=(state[1]+1)%9;
-	if(flag[2]==0)
-		state[2]=(state[2]+1)%9;
+    if ((stop_flag & (1 << 0)) == 0)
+    {
+        order_rank[0] = (order_rank[0] + 1) % 9;
+        state[0] = order[0][order_rank[0]];
+    }
+    if ((stop_flag & (1 << 1)) == 0)
+    {
+        order_rank[1] = (order_rank[1] + 1) % 9;
+        state[1] = order[1][order_rank[1]];
+    }
+    if ((stop_flag & (1 << 2)) == 0)
+    {
+        order_rank[2] = (order_rank[2] + 1) % 9;
+        state[2] = order[2][order_rank[2]];
+    }
+    IO1CLR |= 0xFFF0000;
+    IO1SET |= state[0] + 1 << 16;
+    IO1SET |= state[1] + 1 << 20;
+    IO1SET |= state[2] + 1 << 24;
 }
 
-/*void Show_Time(int num)
+void Show_Time(int num)
 {
-    int d = result[num] - state[num];
-    uint8 trun_tick[4] = {1, 5, 14, 30};
-    d = (d + 9) % 9 + 18; //滚动至目标前第四个数
-    for (int i = 0; i != 4; i++)
-        trun_tick[i] += d;
-    d += 30; //非线性停止
-    for (int i = 0, j = 0; i != d; d++)
+    int i;
+    int j;
+    int d = order_map[num][result[num]] - order_rank[num];
+    const uint8 trun_tick[4] = {0, 4, 13, 29};
+    d = (d + 9) % 9 + 18 - 4; //滚动至目标前第四个数
+    for (i = 0; i != d; i++)
+    {
+        while ((T0IR & 1) == 0) //50ms
+            ;
+        T0IR |= 1;
+        Refresh();
+    }
+    for (i = 0, j = 0; i != 30; i++)
     {
         if (i == trun_tick[j])
             j++;
-        else                    //未到转变点，预先减掉Reflesh()即将加的
-            state[num]--;
-        if ((T0IR & 1) != 0) //50ms
-            Refresh();
+        else //未到转变点，预先减掉Reflesh()即将加的
+            order_rank[num]--;
+        while ((T0IR & 1) == 0) //50ms
+            ;
+        T0IR |= 1;
+        Refresh();
     }
-    //标记该数码管已停
-    flag[num]=1;
-    （Refresh()使用）,退出
-}*/
+    //标记该数码管已停（Refresh()使用）,退出
+    stop_flag |= 1 << num;
+}
 
 //关闭所有中断
 //关闭本身按停按钮的指示灯
 //调用Show_Time()
 void __irq EINT0_ISR()
 {
-	flag[0]=1;
-	LEDTAB=LEDTAB&0xF0;
-	IO0CLR |= (1 << 7);
-	SPI_Write(LEDTAB);
-	SPI_Write(0xF0);
-	IO0SET |= (1 << 7);
-	//Show_Time(0);
-	EXTINT =0x0F;
-	VICVectAddr =0;
+    Show_Time(0);
+    stop_flag |= (1 << 0);
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
+    EXTINT = 0x0F;
+    VICVectAddr = 0;
 }
 
 void __irq EINT1_ISR()
 {
-	flag[1]=1;
-	LEDTAB=LEDTAB&0xEF;
-	IO0CLR |= (1 << 7);
-	SPI_Write(LEDTAB);
-	SPI_Write(0xF0);
-	IO0SET |= (1 << 7);
-	//Show_Time(1);
-	EXTINT =0x0F;
-	VICVectAddr =0;
+    Show_Time(1);
+    stop_flag |= (1 << 1);
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
+    EXTINT = 0x0F;
+    VICVectAddr = 0;
 }
 
-/*void __irq EINT2_ISR()
+void __irq EINT2_ISR()
 {
-	flag[2]=1;
-	LEDTAB=LEDTAB&0xDF;
-	IO0CLR |= (1 << 7);
-	SPI_Write(LEDTAB);
-	SPI_Write(0xF0);
-	IO0SET |= (1 << 7);
-	//Show_Time(2);
-	EXTINT =0x0F;
-	VICVectAddr =0;
-}*/
-//中断我怎么加都只有两个能用，就是在p0.7后的一用SPI就用不了，你看看哪里有问题
-void IrqInit()
-{
-	//这是p0.1和p0.3作为外部中断
-	PINSEL0|=0xCC;
-	//PINSEL0|=0xA0000000;
-	//PINSEL1|=0x
-	
-	EXTMODE =EXTMODE&0xFC;
-	EXTPOLAR=EXTPOLAR&0xFC;
-	
-	VICIntSelect=0x00;
-	VICVectAddr7=(uint32)EINT0_ISR;
-	VICVectCntl7=0x20|14;
-	VICVectAddr8=(uint32)EINT1_ISR;
-	VICVectCntl8=0x20|15;
-	/*VICVectAddr9=(uint32)EINT2_ISR;
-	VICVectCntl9=0x20|16;*/
-	VICIntEnable=(1<<14)|(1<<15);
-	//VICIntEnable=(1<<14)|(1<<15)|(1<<16);
+    Show_Time(2);
+    stop_flag |= (1 << 2);
+    if (stop_flag == 0x7)
+        stop_flag |= 1 << 4;
+    EXTINT = 0x0F;
+    VICVectAddr = 0;
 }
 
-int main (void)
-{// add user source code 
-	SPI_Init();
-	IrqInit();
-	GameInit();
-	while(1)
-	{
-		/*********************** STANDBY MODE **********************/
-		while(1)
-		{
-			//游戏币足够才打开开始按键的指示灯
-		 	if(coin>0)
-				MessageDisplay(0x07);
-			else
-				MessageDisplay(0x06);
-			if((IO0PIN&Start)==0)
-			{
-			//币不够无法开始
-				if(coin<=0)
-				{
-					while((IO0PIN&Start)==0);
-					continue;
-				}
-				GameStart();
-				break;
-			}
-			if((IO0PIN&AddCoin)==0)
-				Add_Coin();
-			if((IO0PIN&AddWager)==0)
-				Add_Wager();
-		}
-		/************************ WORK MODE ************************/	
-		while(1)
-		{
-			Refresh();
-		}
-	}
+void EINT_Init()
+{
+    PINSEL0 |= 0xA0000000;
+    PINSEL0 &= ~0x50000000;
+    PINSEL1 |= 0x1;
+    PINSEL1 &= ~0x2;
+
+    EXTMODE |= 0x7;
+    EXTPOLAR &= ~0x7;
+
+    VICIntSelect = 0x00;
+    VICVectAddr7 = (uint32)EINT0_ISR;
+    VICVectCntl7 = 0x20 | 14;
+    VICVectAddr8 = (uint32)EINT1_ISR;
+    VICVectCntl8 = 0x20 | 15;
+    VICVectAddr9 = (uint32)EINT2_ISR;
+    VICVectCntl9 = 0x20 | 16;
+    VICIntEnable = 7 << 14;
+}
+
+void Wind_Up()
+{
+    switch (fate)
+    {
+    case LOSE:
+        coin -= 1 * wager;
+        break;
+    case SINGLE:
+        coin += 3 * wager;
+        break;
+    case NORMAL:
+        coin += 20 * wager;
+        break;
+    case BIG:
+        coin += 100 * wager;
+        break;
+    }
+    Update();
+}
+
+int main(void)
+{
+    SPI_Init();
+    EINT_Init();
+    GameInit();
+    Timer0_Init();
+    Timer1_Init();
+    Update();
+    while (1)
+    {
+        /*********************** STANDBY MODE **********************/
+        while (1)
+        {
+            //游戏币足够才打开开始按键的指示灯
+            if ((IO0PIN & Start) == 0)
+            {
+                //币不够无法开始
+                if (coin <= 0)
+                {
+                    while ((IO0PIN & Start) == 0)
+                        ;
+                    continue;
+                }
+                GameStart();
+                break;
+            }
+            if ((IO0PIN & AddCoin) == 0)
+                Add_Coin();
+            if ((IO0PIN & AddWager) == 0)
+                Add_Wager();
+        }
+        /************************ WORK MODE ************************/
+        Timer0_Start();
+        while (1)
+        {
+            while ((T0IR & 1) == 0) //50ms
+                ;
+            T0IR |= 1;
+            Refresh();
+            if ((stop_flag & (1 << 4)) != 0)
+            {
+                stop_flag = 0;
+                Wind_Up();
+                break;
+            }
+        }
+        Timer0_End();
+    }
     return 0;
 }
-/*********************************************************************************************************
-**                            End Of File
-********************************************************************************************************/
